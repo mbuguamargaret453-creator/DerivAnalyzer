@@ -37,6 +37,9 @@ const stake=Number(s),contracts=Math.min(2,Math.max(1,Number(c)));if(!Number.isF
 setBusy(true);
 try{
 const current=await refreshAuth();
+if(current?.liveTradingEnabled&&!current.connected){
+throw new Error("Live trading is enabled but no Deriv account is connected. Connect a Deriv account before placing a live order.");
+}
 if(current?.liveTradingEnabled&&current.connected){
 const proposals=[];
 for(let i=0;i<contracts;i++){const r=await fetch("/api/trading/proposal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount:stake,currency:"USD",contract_type:d==="UP"?"CALL":"PUT",underlying_symbol:"R_100",duration:5,duration_unit:"t"})});const data=await r.json();if(!r.ok)throw new Error(data.error||"Proposal request failed");proposals.push({id:data.proposal?.id,price:data.proposal?.ask_price||data.proposal?.display_value})}
@@ -56,7 +59,7 @@ return <div className="app"><header><div><h1>Deriv Up/Down Bot</h1><span classNa
 <label>Stake<input min="0.35" step="0.01" type="number" value={s} onChange={e=>setS(+e.target.value)}/></label>
 <label>Contracts<select value={c} onChange={e=>setC(+e.target.value)}><option value={1}>1</option><option value={2}>2</option></select></label>
 <button className="start" disabled={busy} onClick={()=>setRun(!run)}>{run?<><Pause/> PAUSE BOT</>:<><Play/> START BOT</>}</button>
-<p>EMA/RSI signals are heuristics, not guarantees. Paper mode is the default. Live execution requires authenticated server-side Deriv access.</p></div>
+<p>EMA/RSI signals are heuristics, not guarantees. Paper mode is the default. Live execution requires authenticated server-side Deriv access. If live execution is enabled, the bot will not silently fall back to paper trading.</p></div>
 <div className="panel"><h2>Trade History</h2><table><tbody>{ts.map((t,i)=><tr key={i}><td>{t.d}</td><td>{t.mode}</td><td>{t.strength||0}%</td><td>{t.live?"LIVE":t.error?"ERROR":t.win?"WIN":"LOSS"}</td><td>{t.error||t.v==null?"—":(t.v>=0?"+":"")+"$"+t.v.toFixed(2)}</td></tr>)}</tbody></table></div></section></div>}
 function Card(x){return <div className="card"><small>{x.a}</small><strong>{x.b}</strong></div>}
 createRoot(document.getElementById("root")).render(<App/>);

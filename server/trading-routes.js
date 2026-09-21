@@ -52,7 +52,11 @@ router.post("/buy",async(req,res)=>{
       if(!proposal?.id||!Number.isFinite(Number(proposal.price)))throw new Error("Invalid proposal");
       const bought=await session.trader.buy(proposal.id,proposal.price);
       results.push(bought);boughtCount++;
-      if(bought.buy?.contract_id)tradingEngine.addContract(bought.buy.contract_id,{direction:req.body.direction,stake});
+      if(bought.buy?.contract_id){
+        const contractId=String(bought.buy.contract_id);
+        tradingEngine.addContract(contractId,{direction:req.body.direction,stake});
+        await session.trader.watchContract(contractId);
+      }
     }
     tradingEngine.finalizeOrder(reservation,boughtCount);reservation=null;
     res.json({count:boughtCount,results,status:tradingEngine.status()});
@@ -70,10 +74,7 @@ router.post("/contract",async(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-router.post("/settle",(req,res)=>{
-  if(!getSession(req))return res.status(401).json({error:"Not authenticated"});
-  res.json(tradingEngine.settle(req.body.contractId,req.body.profit));
-});
+router.post("/settle",(req,res)=>res.status(410).json({error:"Manual settlement disabled; contracts are settled from Deriv contract updates"}));
 router.post("/stop",(req,res)=>res.json(tradingEngine.stop()));
 
 export default router;

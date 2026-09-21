@@ -81,8 +81,7 @@ export function getSession(req){
   const session=id?sessions.get(id):null;
   if(session?.expiresAt&&Date.now()>=session.expiresAt){
     if(session.trader)detachContractMonitoring(session);
-    if(session.trader)detachContractMonitoring(session);
-  if(session.trader)session.trader.close();
+    if(session.trader)session.trader.close();
     sessions.delete(id);
     return null;
   }
@@ -166,6 +165,7 @@ export function destroySession(req){
   const cookies=parseCookie(req.headers.cookie||"");
   const id=cookies[COOKIE];
   const session=id?sessions.get(id):null;
+  if(session?.trader)detachContractMonitoring(session);
   if(session?.trader)session.trader.close();
   if(id)sessions.delete(id);
 }

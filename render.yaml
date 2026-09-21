@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: deriv-updown-dashboard
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run server
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: DERIV_CLIENT_ID
+        sync: false
+      - key: DERIV_REDIRECT_URI
+        sync: false
+      - key: DERIV_OAUTH_SCOPE
+        value: trade
+      - key: AUTH_SUCCESS_REDIRECT
+        value: /
+      - key: MAX_DAILY_LOSS
+        value: "10"
+      - key: PROFIT_TARGET
+        value: "10"
+      - key: MAX_TRADES
+        value: "50"
+      - key: MAX_CONSECUTIVE_LOSSES
+        value: "3"

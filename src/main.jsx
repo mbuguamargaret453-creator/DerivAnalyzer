@@ -40,7 +40,7 @@ finally{setBusy(false);}
 }
 
 return <div className="app"><header><div><h1>Deriv Up/Down Bot</h1><span className="live-dot">● R_100 LIVE TICKS</span></div><div><span className="live-dot">{status==="LIVE"?"● LIVE EXECUTION":"● PAPER EXECUTION"}</span><button onClick={()=>{setRun(false);setPending(null)}}><Square/> STOP</button></div></header>
-<div className="stats"><Card a="Balance" b={status==="PAPER"?"$"+b.toFixed(2):"SERVER"/><Card a="Price" b={p?p.toFixed(4):"—"}/><Card a="Signal" b={signal.direction+" "+(signal.strength?signal.strength+"%":"")}/><Card a="Trades" b={ts.length}/></div>
+<div className="stats"><Card a="Balance" b={status==="PAPER"?"$"+b.toFixed(2):"SERVER"}/><Card a="Price" b={p?p.toFixed(4):"—"}/><Card a="Signal" b={signal.direction+" "+(signal.strength?signal.strength+"%":"")}/><Card a="Trades" b={ts.length}/></div>
 <section><div className="panel"><h2>Trading Controls</h2><div className="tabs">{["MANUAL","SEMI-AUTO","AUTO"].map(x=><button key={x} className={m===x?"on":""} onClick={()=>{setM(x);setPending(null);lastAction.current={direction:"WAIT",time:0}}}>{x}</button>)}</div>
 {m==="SEMI-AUTO"&&pending&&<div className="approval"><div><strong>Strategy signal: {pending.direction}</strong><small>Confidence {pending.strength}% · Price {pending.price}</small><small>{pending.reason}</small></div><div><button className="approve" disabled={busy} onClick={()=>{executeTrade(pending.direction,pending.strength);setPending(null)}}><Check/> {busy?"EXECUTING":"APPROVE"}</button><button className="reject" disabled={busy} onClick={()=>setPending(null)}>REJECT</button></div></div>}
 <div className="signal-box"><span>EMA 9 / EMA 21</span><strong>{signal.direction}</strong><small>RSI(14): {signal.rsi==null?"—":signal.rsi.toFixed(1)}</small></div>

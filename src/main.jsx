@@ -1,45 +1,53 @@
 import React,{useEffect,useRef,useState}from"react";
 import{createRoot}from"react-dom/client";
-import{ArrowUp,ArrowDown,Play,Pause,Square,Check}from"lucide-react";
+import{ArrowUp,ArrowDown,Play,Pause,Square,Check,LogIn,RefreshCw,LogOut}from"lucide-react";
 import{getSignal}from"./strategy";
 import"./styles.css";
 
 function App(){
-const[m,setM]=useState("MANUAL"),[run,setRun]=useState(false),[p,setP]=useState(null),[s,setS]=useState(1),[c,setC]=useState(1),[b,setB]=useState(100),[ts,setTs]=useState([]),[signal,setSignal]=useState({direction:"WAIT",strength:0}),[pending,setPending]=useState(null),[live,setLive]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState("PAPER");
+const[m,setM]=useState("MANUAL"),[run,setRun]=useState(false),[p,setP]=useState(null),[s,setS]=useState(1),[c,setC]=useState(1),[b,setB]=useState(100),[ts,setTs]=useState([]),[signal,setSignal]=useState({direction:"WAIT",strength:0}),[pending,setPending]=useState(null),[live,setLive]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState("PAPER"),[auth,setAuth]=useState({authenticated:false,connected:false,accountId:null,accountType:null}),[accounts,setAccounts]=useState([]),[account,setAccount]=useState(""),[authBusy,setAuthBusy]=useState(false),[authError,setAuthError]=useState("");
 const prices=useRef([]),lastAction=useRef({direction:"WAIT",time:0});
 
-useEffect(()=>{fetch("/api/trading/status").then(r=>r.json()).then(x=>{setLive(Boolean(x.liveTradingEnabled));setStatus(x.liveTradingEnabled?"LIVE":"PAPER")}).catch(()=>{});},[]);
+async function refreshAuth(){
+try{const r=await fetch("/api/auth/status");const x=await r.json();setAuth(x);setLive(Boolean(x.liveTradingEnabled));setStatus(x.liveTradingEnabled&&x.connected?"LIVE":"PAPER");return x}catch(e){setAuthError("Could not read Deriv connection status");return null}}
+useEffect(()=>{refreshAuth()},[]);
+
+async function loadAccounts(){
+setAuthError("");setAuthBusy(true);
+try{const r=await fetch("/api/auth/accounts");const x=await r.json();if(!r.ok)throw new Error(x.error||"Could not load accounts");const list=x.data||x.accounts||[];setAccounts(list);if(list.length&&!account)setAccount(String(list[0].account_id||list[0].id||""));}
+catch(e){setAuthError(e.message)}finally{setAuthBusy(false)}}
+
+async function connectAccount(){
+if(!account)return;
+setAuthError("");setAuthBusy(true);
+try{const r=await fetch("/api/auth/connect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account_id:account})});const x=await r.json();if(!r.ok)throw new Error(x.error||"Account connection failed");await refreshAuth();}
+catch(e){setAuthError(e.message)}finally{setAuthBusy(false)}}
+
+async function logout(){
+setAuthBusy(true);try{await fetch("/api/auth/logout",{method:"POST"});setAccounts([]);setAccount("");await refreshAuth()}finally{setAuthBusy(false)}
+}
 
 useEffect(()=>{let w=new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");w.onopen=()=>w.send(JSON.stringify({ticks:"R_100",subscribe:1}));w.onmessage=e=>{const d=JSON.parse(e.data);if(!d.tick)return;const price=Number(d.tick.quote);setP(price);prices.current=[...prices.current.slice(-199),price];const next=getSignal(prices.current);setSignal(next);
-if(run&&m==="AUTO"&&next.direction!=="WAIT"&&next.strength>=55&&Date.now()-lastAction.current.time>5000&&next.direction!==lastAction.current.direction){lastAction.current={direction:next.direction,time:Date.now()};executeTrade(next.direction,next.strength);}
-if(run&&m==="SEMI-AUTO"&&next.direction!=="WAIT"&&next.strength>=55&&Date.now()-lastAction.current.time>5000&&next.direction!==lastAction.current.direction){lastAction.current={direction:next.direction,time:Date.now()};setPending({direction:next.direction,strength:next.strength,reason:next.reason,price});}};return()=>w.close()},[run,m]);
+if(run&&m==="AUTO"&&next.direction!=="WAIT"&&next.strength>=55&&Date.now()-lastAction.current.time>5000&&next.direction!==lastAction.current.direction){lastAction.current={direction:next.direction,time:Date.now()};executeTrade(next.direction,next.strength)}
+if(run&&m==="SEMI-AUTO"&&next.direction!=="WAIT"&&next.strength>=55&&Date.now()-lastAction.current.time>5000&&next.direction!==lastAction.current.direction){lastAction.current={direction:next.direction,time:Date.now()};setPending({direction:next.direction,strength:next.strength,reason:next.reason,price})}};return()=>w.close()},[run,m]);
 
 async function executeTrade(d,strength=signal.strength){
 if(busy)return;
-const stake=Number(s),contracts=Math.min(2,Math.max(1,Number(c)));
-if(!Number.isFinite(stake)||stake<=0)return;
+const stake=Number(s),contracts=Math.min(2,Math.max(1,Number(c)));if(!Number.isFinite(stake)||stake<=0)return;
 setBusy(true);
 try{
-const current=await fetch("/api/trading/status").then(r=>r.json());
-if(current.liveTradingEnabled){
+const current=await refreshAuth();
+if(current?.liveTradingEnabled&&current.connected){
 const proposals=[];
-for(let i=0;i<contracts;i++){
-const r=await fetch("/api/trading/proposal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount:stake,currency:"USD",contract_type:d==="UP"?"CALL":"PUT",underlying_symbol:"R_100",duration:5,duration_unit:"t"})});
-const data=await r.json();if(!r.ok)throw new Error(data.error||"Proposal request failed");
-proposals.push({id:data.proposal?.id,price:data.proposal?.ask_price||data.proposal?.display_value});
-}
-const r=await fetch("/api/trading/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({direction:d,stake,contracts,signalId:`${d}-${Date.now()}`,proposals})});
-const data=await r.json();if(!r.ok)throw new Error(data.error||"Buy request failed");
-setTs(q=>[{d,mode:m,strength,live:true,result:"OPEN"},...q].slice(0,15));
-}else{
-const win=Math.random()>.48,v=win?stake*contracts*.92:-stake*contracts;
-setB(z=>z+v);setTs(q=>[{d,win,v,mode:m,strength,live:false},...q].slice(0,15));
-}
-}catch(e){setTs(q=>[{d,mode:m,strength,live:live,error:e.message},...q].slice(0,15));}
-finally{setBusy(false);}
+for(let i=0;i<contracts;i++){const r=await fetch("/api/trading/proposal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount:stake,currency:"USD",contract_type:d==="UP"?"CALL":"PUT",underlying_symbol:"R_100",duration:5,duration_unit:"t"})});const data=await r.json();if(!r.ok)throw new Error(data.error||"Proposal request failed");proposals.push({id:data.proposal?.id,price:data.proposal?.ask_price||data.proposal?.display_value})}
+const r=await fetch("/api/trading/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({direction:d,stake,contracts,signalId:`${d}-${Date.now()}`,proposals})});const data=await r.json();if(!r.ok)throw new Error(data.error||"Buy request failed");setTs(q=>[{d,mode:m,strength,live:true,result:"OPEN"},...q].slice(0,15))
+}else{const win=Math.random()>.48,v=win?stake*contracts*.92:-stake*contracts;setB(z=>z+v);setTs(q=>[{d,win,v,mode:m,strength,live:false},...q].slice(0,15))}
+}catch(e){setTs(q=>[{d,mode:m,strength,live:false,error:e.message},...q].slice(0,15))}finally{setBusy(false)}
 }
 
-return <div className="app"><header><div><h1>Deriv Up/Down Bot</h1><span className="live-dot">● R_100 LIVE TICKS</span></div><div><span className="live-dot">{status==="LIVE"?"● LIVE EXECUTION":"● PAPER EXECUTION"}</span><button onClick={()=>{setRun(false);setPending(null)}}><Square/> STOP</button></div></header>
+return <div className="app"><header><div><h1>Deriv Up/Down Bot</h1><span className="live-dot">● R_100 LIVE TICKS</span></div><div className="header-actions"><span className="live-dot">{status==="LIVE"?"● LIVE EXECUTION":"● PAPER EXECUTION"}</span><button onClick={()=>{setRun(false);setPending(null)}}><Square/> STOP</button></div></header>
+<div className="connect-panel"><div><strong>{auth.connected?"Deriv account connected":"Connect Deriv"}</strong><small>{auth.connected?`${auth.accountId} · ${auth.accountType||"account"}`:"Authenticate securely on the server, then choose an account."}</small></div>{!auth.authenticated?<a className="connect-button" href="/api/auth/login"><LogIn/> CONNECT DERIV</a>:!auth.connected?<><button disabled={authBusy} onClick={loadAccounts}><RefreshCw/> {authBusy?"LOADING":"LOAD ACCOUNTS"}</button>{accounts.length>0&&<><select className="account-select" value={account} onChange={e=>setAccount(e.target.value)}><option value="">Select account</option>{accounts.map((a,i)=>{const id=String(a.account_id||a.id||"");return <option key={id||i} value={id}>{id} · {a.account_type||a.type||"account"}{a.currency?` · ${a.currency}`:""}</option>})}</select><button className="connect-button" disabled={!account||authBusy} onClick={connectAccount}><Check/> CONNECT ACCOUNT</button></>:<button disabled={authBusy} onClick={logout}><LogOut/> LOG OUT</button>}</div>
+{authError&&<small className="auth-error">{authError}</small>}</div>
 <div className="stats"><Card a="Balance" b={status==="PAPER"?"$"+b.toFixed(2):"SERVER"}/><Card a="Price" b={p?p.toFixed(4):"—"}/><Card a="Signal" b={signal.direction+" "+(signal.strength?signal.strength+"%":"")}/><Card a="Trades" b={ts.length}/></div>
 <section><div className="panel"><h2>Trading Controls</h2><div className="tabs">{["MANUAL","SEMI-AUTO","AUTO"].map(x=><button key={x} className={m===x?"on":""} onClick={()=>{setM(x);setPending(null);lastAction.current={direction:"WAIT",time:0}}}>{x}</button>)}</div>
 {m==="SEMI-AUTO"&&pending&&<div className="approval"><div><strong>Strategy signal: {pending.direction}</strong><small>Confidence {pending.strength}% · Price {pending.price}</small><small>{pending.reason}</small></div><div><button className="approve" disabled={busy} onClick={()=>{executeTrade(pending.direction,pending.strength);setPending(null)}}><Check/> {busy?"EXECUTING":"APPROVE"}</button><button className="reject" disabled={busy} onClick={()=>setPending(null)}>REJECT</button></div></div>}

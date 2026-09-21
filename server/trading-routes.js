@@ -1,58 +1,69 @@
 import express from "express";
 import { DerivTrader } from "./deriv-trader.js";
-import { TradingEngine } from "./trading-engine.js";
+import { tradingEngine } from "./trading-engine.js";
 
 const router=express.Router();
 let trader=null;
-const engine=new TradingEngine({maxDailyLoss:10,profitTarget:10,maxTrades:50,maxConsecutiveLosses:3});
+
+router.get("/status",(req,res)=>res.json({...tradingEngine.status(),connected:Boolean(trader),liveTradingEnabled:process.env.LIVE_TRADING_ENABLED==="true"}));
 
 router.post("/connect",async(req,res)=>{
   try{
     if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
     if(!req.body.wsUrl) return res.status(400).json({error:"Authenticated Deriv WebSocket URL required"});
-    trader=new DerivTrader(req.body.wsUrl); await trader.connect();
-    res.json({ok:true});
+    if(trader) trader.close();
+    trader=new DerivTrader(req.body.wsUrl);
+    await trader.connect();
+    res.json({ok:true,liveTradingEnabled:true});
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-router.get("/status",(req,res)=>res.json({...engine.status(),connected:Boolean(trader)}));
-
-router.post("/start",async(req,res)=>{
-  try{
-    const balance=Number(req.body.balance);
-    if(!Number.isFinite(balance)) return res.status(400).json({error:"Valid starting balance required"});
-    engine.start(balance); res.json(engine.status());
-  }catch(e){res.status(400).json({error:e.message});}
+router.post("/start",(req,res)=>{
+  try{tradingEngine.start(req.body.balance);res.json(tradingEngine.status());}
+  catch(e){res.status(400).json({error:e.message});}
 });
 
 router.post("/proposal",async(req,res)=>{
   try{
+    if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
     if(!trader)return res.status(409).json({error:"Not connected"});
-    const p=await trader.proposal(req.body);res.json(p);
+    res.json(await trader.proposal(req.body));
   }catch(e){res.status(400).json({error:e.message});}
 });
 
 router.post("/authorize-order",(req,res)=>{
-  const result=engine.beginOrder(req.body);
+  const result=tradingEngine.reserveOrder(req.body);
   res.status(result.ok?200:409).json(result);
 });
 
 router.post("/buy",async(req,res)=>{
+  let reservation=null;
   try{
+    if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
     if(!trader)return res.status(409).json({error:"Not connected"});
     const count=Math.min(2,Math.max(1,Number(req.body.contracts||1)));
     const stake=Number(req.body.stake);
-    const guard=engine.canTrade(stake,count);
-    if(!guard.ok)return res.status(409).json(guard);
+    const reservationResult=tradingEngine.reserveOrder(req.body);
+    if(!reservationResult.ok)return res.status(409).json(reservationResult);
+    reservation=reservationResult.key;
+    if(!Array.isArray(req.body.proposals)||req.body.proposals.length<count){
+      tradingEngine.releaseOrder(reservation);
+      return res.status(400).json({error:"A separate proposal is required for each contract"});
+    }
     const results=[];
     for(let i=0;i<count;i++){
-      if(!req.body.proposals?.[i]) return res.status(400).json({error:"A separate proposal is required for each contract"});
-      const bought=await trader.buy(req.body.proposals[i].id,Number(req.body.proposals[i].price));
+      const proposal=req.body.proposals[i];
+      if(!proposal?.id||!Number.isFinite(Number(proposal.price))) throw new Error("Invalid proposal");
+      const bought=await trader.buy(proposal.id,proposal.price);
       results.push(bought);
-      if(bought.buy?.contract_id)engine.addContract(bought.buy.contract_id,{direction:req.body.direction,stake});
+      if(bought.buy?.contract_id) tradingEngine.addContract(bought.buy.contract_id,{direction:req.body.direction,stake});
     }
-    res.json({count,results,status:engine.status()});
-  }catch(e){res.status(400).json({error:e.message});}
+    tradingEngine.finalizeOrder(reservation,results.length);
+    res.json({count,results,status:tradingEngine.status()});
+  }catch(e){
+    if(reservation) tradingEngine.releaseOrder(reservation);
+    res.status(400).json({error:e.message,status:tradingEngine.status()});
+  }
 });
 
 router.post("/contract",async(req,res)=>{
@@ -62,7 +73,7 @@ router.post("/contract",async(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-router.post("/settle",(req,res)=>res.json(engine.settle(req.body.contractId,req.body.profit)));
-router.post("/stop",(req,res)=>res.json(engine.stop()));
+router.post("/settle",(req,res)=>res.json(tradingEngine.settle(req.body.contractId,req.body.profit)));
+router.post("/stop",(req,res)=>res.json(tradingEngine.stop()));
 
 export default router;

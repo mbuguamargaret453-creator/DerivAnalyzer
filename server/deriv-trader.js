@@ -8,6 +8,7 @@ export class DerivTrader extends EventEmitter {
     this.ws=null;
     this.req=0;
     this.pending=new Map();
+    this.monitoredContracts=new Set();
   }
 
   connect(){
@@ -70,6 +71,15 @@ export class DerivTrader extends EventEmitter {
     });
   }
   buy(proposalId,price){return this.send({buy:String(proposalId),price:Number(price)});}
-  watchContract(contractId){return this.send({proposal_open_contract:1,contract_id:String(contractId),subscribe:1});}
-  close(){if(this.ws)this.ws.close();}
+  async watchContract(contractId){
+    const id=String(contractId);
+    if(!id)throw new Error("contractId is required");
+    this.monitoredContracts.add(id);
+    return this.send({proposal_open_contract:1,contract_id:id,subscribe:1});
+  }
+  unwatchContract(contractId){this.monitoredContracts.delete(String(contractId));}
+  close(){
+    this.monitoredContracts.clear();
+    if(this.ws)this.ws.close();
+  }
 }

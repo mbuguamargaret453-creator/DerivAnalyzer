@@ -1,0 +1,7 @@
+import express from "express";import {DerivTrader} from "./deriv-trader.js";
+const router=express.Router();let trader=null;
+router.post("/connect",async(req,res)=>{try{if(process.env.LIVE_TRADING_ENABLED!=="true")return res.status(403).json({error:"Live trading disabled"});trader=new DerivTrader(req.body.wsUrl);await trader.connect();res.json({ok:true})}catch(e){res.status(400).json({error:e.message})}});
+router.post("/proposal",async(req,res)=>{try{if(!trader)return res.status(409).json({error:"Not connected"});const p=await trader.proposal(req.body);res.json(p)}catch(e){res.status(400).json({error:e.message})}});
+router.post("/buy",async(req,res)=>{try{if(!trader)return res.status(409).json({error:"Not connected"});const count=Math.min(2,Math.max(1,Number(req.body.contracts||1)));const results=[];for(let i=0;i<count;i++)results.push(await trader.buy(req.body.proposalId,Number(req.body.price)));res.json({count,results})}catch(e){res.status(400).json({error:e.message})}});
+router.post("/contract",async(req,res)=>{try{if(!trader)return res.status(409).json({error:"Not connected"});res.json(await trader.watchContract(req.body.contractId))}catch(e){res.status(400).json({error:e.message})}});
+export default router;

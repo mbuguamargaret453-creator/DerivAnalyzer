@@ -38,7 +38,6 @@ router.get("/accounts",async(req,res)=>{
 
 router.post("/connect",async(req,res)=>{
   try{
-    if(process.env.LIVE_TRADING_ENABLED!=="true")return res.status(403).json({error:"Live trading disabled"});
     const session=getSession(req);
     if(!session)return res.status(401).json({error:"Not authenticated"});
     res.json({ok:true,...await connectAccount(session,req.body.account_id)});

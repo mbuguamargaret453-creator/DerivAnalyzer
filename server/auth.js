@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { DerivTrader } from "./deriv-trader.js";
+import { tradingEngine } from "./trading-engine.js";
 
 const sessions=new Map();
 const oauthStates=new Map();
@@ -49,11 +50,39 @@ function parseCookie(header=""){
   return result;
 }
 
+function detachContractMonitoring(session){
+  if(session?.trader&&session.contractListener){
+    session.trader.off("proposal_open_contract",session.contractListener);
+    session.contractListener=null;
+  }
+}
+
+function attachContractMonitoring(session,trader){
+  detachContractMonitoring(session);
+  const listener=(message)=>{
+    const contract=message?.proposal_open_contract;
+    if(!contract?.contract_id)return;
+    const id=String(contract.contract_id);
+    const status=String(contract.status||"").toLowerCase();
+    if(contract.is_sold===1||contract.is_sold===true||status==="sold"){
+      const active=tradingEngine.status().activeContracts.some(item=>String(item.id)===id);
+      if(active){
+        tradingEngine.settle(id,Number(contract.profit)||0);
+        trader.unwatchContract(id);
+      }
+    }
+  };
+  session.contractListener=listener;
+  trader.on("proposal_open_contract",listener);
+}
+
 export function getSession(req){
   const id=parseCookie(req.headers.cookie||"")[COOKIE];
   const session=id?sessions.get(id):null;
   if(session?.expiresAt&&Date.now()>=session.expiresAt){
-    if(session.trader)session.trader.close();
+    if(session.trader)detachContractMonitoring(session);
+    if(session.trader)detachContractMonitoring(session);
+  if(session.trader)session.trader.close();
     sessions.delete(id);
     return null;
   }
@@ -103,7 +132,8 @@ export async function handleCallback(req){
     expiresAt:Date.now()+expiresIn*1000,
     accountId:null,
     accountType:null,
-    trader:null
+    trader:null,
+    contractListener:null
   });
   return sessionId;
 }
@@ -127,6 +157,7 @@ export async function connectAccount(session,accountId){
   await trader.connect();
   session.accountId=String(accountId);
   session.trader=trader;
+  attachContractMonitoring(session,trader);
   session.accountType=account.account_type||account.type||"unknown";
   return {accountId:session.accountId,accountType:session.accountType};
 }

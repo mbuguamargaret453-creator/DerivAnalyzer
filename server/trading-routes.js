@@ -1,22 +1,12 @@
 import express from "express";
 import { DerivTrader } from "./deriv-trader.js";
 import { tradingEngine } from "./trading-engine.js";
+import { getSession } from "./auth.js";
 
 const router=express.Router();
 let trader=null;
 
-router.get("/status",(req,res)=>res.json({...tradingEngine.status(),connected:Boolean(trader),liveTradingEnabled:process.env.LIVE_TRADING_ENABLED==="true"}));
-
-router.post("/connect",async(req,res)=>{
-  try{
-    if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
-    if(!req.body.wsUrl) return res.status(400).json({error:"Authenticated Deriv WebSocket URL required"});
-    if(trader) trader.close();
-    trader=new DerivTrader(req.body.wsUrl);
-    await trader.connect();
-    res.json({ok:true,liveTradingEnabled:true});
-  }catch(e){res.status(400).json({error:e.message});}
-});
+router.get("/status",(req,res)=>{const session=getSession(req);res.json({...tradingEngine.status(),connected:Boolean(session?.trader),authenticated:Boolean(session),accountId:session?.accountId||null,liveTradingEnabled:process.env.LIVE_TRADING_ENABLED==="true"});});
 
 router.post("/start",(req,res)=>{
   try{tradingEngine.start(req.body.balance);res.json(tradingEngine.status());}
@@ -26,7 +16,7 @@ router.post("/start",(req,res)=>{
 router.post("/proposal",async(req,res)=>{
   try{
     if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
-    if(!trader)return res.status(409).json({error:"Not connected"});
+    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
     res.json(await trader.proposal(req.body));
   }catch(e){res.status(400).json({error:e.message});}
 });
@@ -40,7 +30,7 @@ router.post("/buy",async(req,res)=>{
   let reservation=null;
   try{
     if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
-    if(!trader)return res.status(409).json({error:"Not connected"});
+    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
     const count=Math.min(2,Math.max(1,Number(req.body.contracts||1)));
     const stake=Number(req.body.stake);
     const reservationResult=tradingEngine.reserveOrder(req.body);
@@ -68,7 +58,7 @@ router.post("/buy",async(req,res)=>{
 
 router.post("/contract",async(req,res)=>{
   try{
-    if(!trader)return res.status(409).json({error:"Not connected"});
+    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
     res.json(await trader.watchContract(req.body.contractId));
   }catch(e){res.status(400).json({error:e.message});}
 });

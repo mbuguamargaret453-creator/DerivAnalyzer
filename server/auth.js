@@ -6,17 +6,15 @@ const oauthStates=new Map();
 const API_BASE="https://api.derivws.com";
 const AUTH_BASE="https://auth.deriv.com";
 const COOKIE="deriv_session";
+const STATE_TTL=10*60*1000;
 
 function required(name){
   const value=process.env[name];
   if(!value) throw new Error(`Missing environment variable: ${name}`);
   return value;
 }
-
 function randomUrlSafe(bytes=32){return crypto.randomBytes(bytes).toString("base64url");}
-
 function sha256(value){return crypto.createHash("sha256").update(value).digest("base64url");}
-
 export function getRedirectUri(){return required("DERIV_REDIRECT_URI");}
 
 export function createLoginUrl(){
@@ -40,10 +38,7 @@ export function createSessionCookie(sessionId){
   const secure=process.env.NODE_ENV==="production"?" Secure":"";
   return `${COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${secure}`;
 }
-
-export function clearSessionCookie(){
-  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
-}
+export function clearSessionCookie(){return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;}
 
 function parseCookie(header=""){
   const result={};
@@ -56,7 +51,13 @@ function parseCookie(header=""){
 
 export function getSession(req){
   const id=parseCookie(req.headers.cookie||"")[COOKIE];
-  return id?sessions.get(id)||null:null;
+  const session=id?sessions.get(id):null;
+  if(session?.expiresAt&&Date.now()>=session.expiresAt){
+    if(session.trader)session.trader.close();
+    sessions.delete(id);
+    return null;
+  }
+  return session||null;
 }
 
 async function exchangeCode(code,verifier){
@@ -73,47 +74,55 @@ async function exchangeCode(code,verifier){
     body
   });
   const data=await response.json();
-  if(!response.ok||!data.access_token) throw new Error(data.error_description||"Deriv token exchange failed");
+  if(!response.ok||!data.access_token)throw new Error(data.error_description||"Deriv token exchange failed");
   return data;
 }
 
-async function apiRequest(token,path,options={}){
-  const headers={"Authorization":`Bearer ${token}`,...(options.headers||{})};
+async function apiRequest(session,path,options={}){
+  if(!session?.accessToken)throw new Error("Not authenticated");
+  if(session.expiresAt&&Date.now()>=session.expiresAt)throw new Error("Deriv session expired; please connect again");
+  const headers={"Authorization":`Bearer ${session.accessToken}`,...(options.headers||{})};
   const response=await fetch(`${API_BASE}${path}`,{...options,headers});
   const data=await response.json();
-  if(!response.ok) throw new Error(data?.errors?.[0]?.message||"Deriv API request failed");
+  if(!response.ok)throw new Error(data?.errors?.[0]?.message||data?.error?.message||"Deriv API request failed");
   return data;
 }
 
 export async function handleCallback(req){
   const {code,state,error,error_description}=req.query;
-  if(error) throw new Error(error_description||error);
-  if(!code||!state) throw new Error("Missing OAuth callback parameters");
+  if(error)throw new Error(error_description||error);
+  if(!code||!state)throw new Error("Missing OAuth callback parameters");
   const pending=oauthStates.get(state);
   oauthStates.delete(state);
-  if(!pending||Date.now()-pending.createdAt>10*60*1000) throw new Error("Invalid or expired OAuth state");
+  if(!pending||Date.now()-pending.createdAt>STATE_TTL)throw new Error("Invalid or expired OAuth state");
   const token=await exchangeCode(code,pending.verifier);
   const sessionId=randomUrlSafe(32);
-  sessions.set(sessionId,{accessToken:token.access_token,expiresAt:Date.now()+Number(token.expires_in||3600)*1000,accountId:null,trader:null});
+  const expiresIn=Math.max(60,Number(token.expires_in||3600));
+  sessions.set(sessionId,{
+    accessToken:token.access_token,
+    expiresAt:Date.now()+expiresIn*1000,
+    accountId:null,
+    accountType:null,
+    trader:null
+  });
   return sessionId;
 }
 
 export async function listAccounts(session){
-  if(!session) throw new Error("Not authenticated");
-  return apiRequest(session.accessToken,"/trading/v1/options/accounts");
+  return apiRequest(session,"/trading/v1/options/accounts");
 }
 
 export async function connectAccount(session,accountId){
-  if(!session) throw new Error("Not authenticated");
-  if(!accountId) throw new Error("account_id is required");
+  if(!session)throw new Error("Not authenticated");
+  if(!accountId)throw new Error("account_id is required");
   const accounts=await listAccounts(session);
   const items=Array.isArray(accounts.data)?accounts.data:accounts.accounts||[];
   const account=items.find(x=>String(x.account_id||x.id)===String(accountId));
-  if(!account) throw new Error("Account is not available to this session");
-  const otp=await apiRequest(session.accessToken,`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`,{method:"POST"});
+  if(!account)throw new Error("Account is not available to this session");
+  const otp=await apiRequest(session,`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`,{method:"POST"});
   const wsUrl=otp?.data?.url;
-  if(!wsUrl) throw new Error("Deriv did not return an authenticated WebSocket URL");
-  if(session.trader) session.trader.close();
+  if(!wsUrl)throw new Error("Deriv did not return an authenticated WebSocket URL");
+  if(session.trader)session.trader.close();
   const trader=new DerivTrader(wsUrl);
   await trader.connect();
   session.accountId=String(accountId);
@@ -126,6 +135,6 @@ export function destroySession(req){
   const cookies=parseCookie(req.headers.cookie||"");
   const id=cookies[COOKIE];
   const session=id?sessions.get(id):null;
-  if(session?.trader) session.trader.close();
-  if(id) sessions.delete(id);
+  if(session?.trader)session.trader.close();
+  if(id)sessions.delete(id);
 }

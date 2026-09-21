@@ -1,12 +1,13 @@
 import express from "express";
-import { DerivTrader } from "./deriv-trader.js";
 import { tradingEngine } from "./trading-engine.js";
 import { getSession } from "./auth.js";
 
 const router=express.Router();
-let trader=null;
 
-router.get("/status",(req,res)=>{const session=getSession(req);res.json({...tradingEngine.status(),connected:Boolean(session?.trader),authenticated:Boolean(session),accountId:session?.accountId||null,liveTradingEnabled:process.env.LIVE_TRADING_ENABLED==="true"});});
+router.get("/status",(req,res)=>{
+  const session=getSession(req);
+  res.json({...tradingEngine.status(),connected:Boolean(session?.trader),authenticated:Boolean(session),accountId:session?.accountId||null,liveTradingEnabled:process.env.LIVE_TRADING_ENABLED==="true"});
+});
 
 router.post("/start",(req,res)=>{
   try{tradingEngine.start(req.body.balance);res.json(tradingEngine.status());}
@@ -15,9 +16,10 @@ router.post("/start",(req,res)=>{
 
 router.post("/proposal",async(req,res)=>{
   try{
-    if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
-    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
-    res.json(await trader.proposal(req.body));
+    if(process.env.LIVE_TRADING_ENABLED!=="true")return res.status(403).json({error:"Live trading disabled"});
+    const session=getSession(req);
+    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});
+    res.json(await session.trader.proposal(req.body));
   }catch(e){res.status(400).json({error:e.message});}
 });
 
@@ -29,8 +31,9 @@ router.post("/authorize-order",(req,res)=>{
 router.post("/buy",async(req,res)=>{
   let reservation=null;
   try{
-    if(process.env.LIVE_TRADING_ENABLED!=="true") return res.status(403).json({error:"Live trading disabled"});
-    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
+    if(process.env.LIVE_TRADING_ENABLED!=="true")return res.status(403).json({error:"Live trading disabled"});
+    const session=getSession(req);
+    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});
     const count=Math.min(2,Math.max(1,Number(req.body.contracts||1)));
     const stake=Number(req.body.stake);
     const reservationResult=tradingEngine.reserveOrder(req.body);
@@ -43,23 +46,24 @@ router.post("/buy",async(req,res)=>{
     const results=[];
     for(let i=0;i<count;i++){
       const proposal=req.body.proposals[i];
-      if(!proposal?.id||!Number.isFinite(Number(proposal.price))) throw new Error("Invalid proposal");
-      const bought=await trader.buy(proposal.id,proposal.price);
+      if(!proposal?.id||!Number.isFinite(Number(proposal.price)))throw new Error("Invalid proposal");
+      const bought=await session.trader.buy(proposal.id,proposal.price);
       results.push(bought);
-      if(bought.buy?.contract_id) tradingEngine.addContract(bought.buy.contract_id,{direction:req.body.direction,stake});
+      if(bought.buy?.contract_id)tradingEngine.addContract(bought.buy.contract_id,{direction:req.body.direction,stake});
     }
     tradingEngine.finalizeOrder(reservation,results.length);
     res.json({count,results,status:tradingEngine.status()});
   }catch(e){
-    if(reservation) tradingEngine.releaseOrder(reservation);
+    if(reservation)tradingEngine.releaseOrder(reservation);
     res.status(400).json({error:e.message,status:tradingEngine.status()});
   }
 });
 
 router.post("/contract",async(req,res)=>{
   try{
-    const session=getSession(req);\n    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});\n    trader=session.trader;
-    res.json(await trader.watchContract(req.body.contractId));
+    const session=getSession(req);
+    if(!session?.trader)return res.status(409).json({error:"Authenticated Deriv account not connected"});
+    res.json(await session.trader.watchContract(req.body.contractId));
   }catch(e){res.status(400).json({error:e.message});}
 });
 
